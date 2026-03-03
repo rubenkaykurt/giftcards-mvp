@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from flask import Flask, request, send_file, abort, jsonify
 from dotenv import load_dotenv
+from werkzeug.exceptions import HTTPException
 
 import stripe
 from reportlab.lib.pagesizes import A4
@@ -34,9 +35,11 @@ DB_PATH = os.getenv("DB_PATH", "giftcards.json")
 
 stripe.api_key = STRIPE_SECRET_KEY
 
+
 def log(*args):
     print(*args, flush=True)
     sys.stdout.flush()
+
 
 # ====== LOGS GLOBALES (clave para depurar) ======
 @app.before_request
@@ -53,16 +56,22 @@ def _log_request():
     except Exception:
         pass
 
+
 @app.after_request
 def _log_response(resp):
     log("=== RESPONSE ===", resp.status)
     return resp
 
+
+# ✅ FIX: no “comerse” 404/405/400 de Flask.
+# Solo capturar excepciones no-HTTP y devolver 500.
 @app.errorhandler(Exception)
 def _log_exception(e):
-    # Ojo: no exponemos detalles al cliente, pero sí los vemos en logs
     log("!!! EXCEPTION !!!", repr(e))
+    if isinstance(e, HTTPException):
+        return e
     return jsonify({"error": "internal_error"}), 500
+
 
 # ====== Utilidades ======
 def load_db():
@@ -71,13 +80,16 @@ def load_db():
     with open(DB_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
+
 def save_db(db):
     with open(DB_PATH, "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=2)
 
+
 def code_exists(code: str) -> bool:
     db = load_db()
     return any(gc.get("code") == code for gc in db.get("giftcards", []))
+
 
 def generate_gift_code(amount_eur: int) -> str:
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
@@ -85,12 +97,14 @@ def generate_gift_code(amount_eur: int) -> str:
     prefix = "TP"
     return f"{prefix}-{amount_eur}-{date_str}-{suffix}"
 
+
 def unique_code(amount_eur: int) -> str:
     for _ in range(30):
         code = generate_gift_code(amount_eur)
         if not code_exists(code):
             return code
     raise RuntimeError("No se pudo generar un código único")
+
 
 def plan_from_amount(amount_eur: int) -> dict:
     if amount_eur == 68:
@@ -117,10 +131,12 @@ def plan_from_amount(amount_eur: int) -> dict:
         "note": "Canje sujeto a valoración y disponibilidad."
     }
 
+
 def euros_from_stripe_amount(amount_total: int, currency: str) -> int:
-    if currency.upper() == "EUR":
-        return int(round(amount_total / 100))
+    # Stripe amounts are usually in the smallest currency unit (cents for EUR).
+    # Keep it simple: divide by 100 and round.
     return int(round(amount_total / 100))
+
 
 # ====== PDF ======
 def wrap_text(s: str, max_chars: int):
@@ -138,6 +154,7 @@ def wrap_text(s: str, max_chars: int):
     if current:
         lines.append(" ".join(current))
     return lines
+
 
 def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     meta = plan_from_amount(amount_eur)
@@ -160,31 +177,31 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
 
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 24)
-    c.drawString(card_x + 18*mm, card_y + card_h - 28*mm, f"{BRAND_NAME} · Tarjeta Regalo")
+    c.drawString(card_x + 18 * mm, card_y + card_h - 28 * mm, f"{BRAND_NAME} · Tarjeta Regalo")
 
     c.setFont("Helvetica", 13)
     c.setFillColorRGB(0.78, 0.82, 0.92)
-    c.drawString(card_x + 18*mm, card_y + card_h - 38*mm, "Edición Día del Padre")
+    c.drawString(card_x + 18 * mm, card_y + card_h - 38 * mm, "Edición Día del Padre")
 
     c.setFillColorRGB(0.95, 0.83, 0.54)
     c.setFont("Helvetica-Bold", 18)
-    c.drawString(card_x + 18*mm, card_y + card_h - 58*mm, f"{plan}")
+    c.drawString(card_x + 18 * mm, card_y + card_h - 58 * mm, f"{plan}")
 
     c.setFont("Helvetica-Bold", 34)
-    c.drawRightString(card_x + card_w - 18*mm, card_y + card_h - 58*mm, f"{amount_eur}€")
+    c.drawRightString(card_x + card_w - 18 * mm, card_y + card_h - 58 * mm, f"{amount_eur}€")
 
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(card_x + 18*mm, card_y + card_h - 78*mm, "Código")
+    c.drawString(card_x + 18 * mm, card_y + card_h - 78 * mm, "Código")
     c.setFont("Helvetica", 14)
-    c.drawString(card_x + 18*mm, card_y + card_h - 88*mm, code)
+    c.drawString(card_x + 18 * mm, card_y + card_h - 88 * mm, code)
 
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(card_x + 18*mm, card_y + card_h - 110*mm, "Beneficio promoción")
+    c.drawString(card_x + 18 * mm, card_y + card_h - 110 * mm, "Beneficio promoción")
     c.setFont("Helvetica", 12)
     c.setFillColorRGB(0.78, 0.82, 0.92)
 
-    text = c.beginText(card_x + 18*mm, card_y + card_h - 122*mm)
+    text = c.beginText(card_x + 18 * mm, card_y + card_h - 122 * mm)
     text.setLeading(16)
     for line in wrap_text(f"{promo_value}. {note}", 85):
         text.textLine(line)
@@ -192,7 +209,7 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
 
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(card_x + 18*mm, card_y + 62*mm, "Cómo canjear")
+    c.drawString(card_x + 18 * mm, card_y + 62 * mm, "Cómo canjear")
     c.setFillColorRGB(0.78, 0.82, 0.92)
     c.setFont("Helvetica", 12)
 
@@ -201,19 +218,23 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
         "2) Indica este código al equipo.",
         "3) Se descontará del total hasta el importe de la tarjeta."
     ]
-    y = card_y + 54*mm
+    y = card_y + 54 * mm
     for line in canje:
-        c.drawString(card_x + 18*mm, y, line)
-        y -= 8*mm
+        c.drawString(card_x + 18 * mm, y, line)
+        y -= 8 * mm
 
     c.setFillColorRGB(0.62, 0.66, 0.78)
     c.setFont("Helvetica", 10)
-    c.drawString(card_x + 18*mm, card_y + 18*mm, f"Comprador: {buyer_email}")
-    c.drawRightString(card_x + card_w - 18*mm, card_y + 18*mm,
-                      "No canjeable por dinero. Sujeto a disponibilidad y valoración.")
+    c.drawString(card_x + 18 * mm, card_y + 18 * mm, f"Comprador: {buyer_email}")
+    c.drawRightString(
+        card_x + card_w - 18 * mm,
+        card_y + 18 * mm,
+        "No canjeable por dinero. Sujeto a disponibilidad y valoración."
+    )
 
     c.showPage()
     c.save()
+
 
 # ====== EMAIL (SendGrid) ======
 def send_email_with_pdf(to_email: str, subject: str, body: str, pdf_path: str):
@@ -244,10 +265,10 @@ def send_email_with_pdf(to_email: str, subject: str, body: str, pdf_path: str):
     sg = SendGridAPIClient(SENDGRID_API_KEY)
     sg.send(message)
 
+
 # ====== WEBHOOK ======
 @app.route("/stripe/webhook", methods=["POST"], strict_slashes=False)
 def stripe_webhook():
-    # Logs específicos del webhook
     payload = request.get_data(as_text=False)
     sig_header = request.headers.get("Stripe-Signature", "")
 
@@ -335,9 +356,11 @@ def stripe_webhook():
         record["status"] = "issued_email_failed"
         record["email_error"] = str(e)
         save_db(db)
+        # Stripe ya recibió el evento, devolvemos 200 para evitar reintentos por email
         return jsonify({"ok": True, "email_sent": False, "error": str(e), "code": code}), 200
 
     return jsonify({"ok": True, "email_sent": True, "code": code}), 200
+
 
 # (Opcional) descarga por código
 @app.get("/giftcards/<code>")
@@ -351,14 +374,16 @@ def download_giftcard(code: str):
         abort(404)
     return send_file(pdf_path, as_attachment=True, download_name=os.path.basename(pdf_path))
 
+
 @app.get("/health")
 def health():
     return jsonify({"ok": True})
 
+
 @app.get("/")
 def root():
-    # Para que Render/visitas no den 404 y ensucien logs
     return jsonify({"ok": True, "service": "giftcards-mvp"})
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
