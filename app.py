@@ -77,8 +77,21 @@ def _log_exception(e):
 def load_db():
     if not os.path.exists(DB_PATH):
         return {"giftcards": []}
-    with open(DB_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+
+    try:
+        with open(DB_PATH, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+            if not raw:
+                return {"giftcards": []}
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return {"giftcards": []}
+            if "giftcards" not in data or not isinstance(data["giftcards"], list):
+                return {"giftcards": []}
+            return data
+    except Exception as e:
+        log("DB LOAD FAILED, resetting:", repr(e))
+        return {"giftcards": []}
 
 
 def save_db(db):
