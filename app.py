@@ -387,10 +387,9 @@ def download_giftcard(code: str):
         abort(404)
     return send_file(pdf_path, as_attachment=True, download_name=os.path.basename(pdf_path))
 
-
-@app.get("/health")
+@app.route("/health", methods=["GET", "HEAD"])
 def health():
-    return jsonify({"ok": True})
+    return jsonify({"ok": True}), 200
 
 
 @app.get("/")
