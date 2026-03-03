@@ -249,12 +249,14 @@ def send_email_with_pdf(to_email: str, subject: str, body: str, pdf_path: str):
 def stripe_webhook():
     payload = request.get_data(as_text=False)
     sig_header = request.headers.get("Stripe-Signature", "")
-log("=== STRIPE WEBHOOK HIT ===")
-log("Method:", request.method)
-log("Path:", request.path)
-log("Content-Type:", request.headers.get("Content-Type"))
-log("Stripe-Signature present:", bool(sig_header))
-log("Payload bytes:", len(payload) if payload else 0)
+
+    log("=== STRIPE WEBHOOK HIT ===")
+    log("Method:", request.method)
+    log("Path:", request.path)
+    log("Content-Type:", request.headers.get("Content-Type"))
+    log("Stripe-Signature present:", bool(sig_header))
+    log("Payload bytes:", len(payload) if payload else 0)
+
     try:
         event = stripe.Webhook.construct_event(
             payload=payload,
@@ -263,46 +265,56 @@ log("Payload bytes:", len(payload) if payload else 0)
         )
 
         log("Event type:", event.get("type"))
-log("Livemode:", event.get("livemode"))
+        log("Livemode:", event.get("livemode"))
+
     except Exception as e:
-        # Firma inválida o payload corrupto
+        log("Webhook signature error:", str(e))
         return jsonify({"error": f"Webhook error: {str(e)}"}), 400
 
     # Solo procesamos el evento clave
     if event["type"] != "checkout.session.completed":
+        log("Ignored event:", event["type"])
         return jsonify({"received": True, "ignored": event["type"]}), 200
 
     session = event["data"]["object"]
 
-    # Datos del comprador
     buyer_email = (
         session.get("customer_details", {}) or {}
     ).get("email") or session.get("customer_email") or None
 
+    log("Buyer email:", buyer_email)
+
     if not buyer_email:
-        # Sin email, no podemos enviar la tarjeta
+        log("ERROR: No buyer email in session")
         return jsonify({"error": "No buyer email in session"}), 400
 
     amount_total = session.get("amount_total")
     currency = (session.get("currency") or "eur").upper()
+
+    log("Amount_total:", amount_total, "Currency:", currency)
+
     if amount_total is None:
         return jsonify({"error": "No amount_total in session"}), 400
 
     amount_eur = euros_from_stripe_amount(amount_total, currency)
+    log("Computed amount_eur:", amount_eur)
 
-    # Idempotencia: evita duplicados si Stripe reintenta
     session_id = session.get("id")
+    log("Session ID:", session_id)
+
     db = load_db()
     if any(gc.get("stripe_session_id") == session_id for gc in db.get("giftcards", [])):
+        log("Duplicate session detected")
         return jsonify({"ok": True, "deduped": True}), 200
 
-    # Generar código y PDF
     code = unique_code(amount_eur)
     pdf_filename = f"giftcard_{code}.pdf"
     pdf_path = os.path.join(PDF_DIR, pdf_filename)
+
+    log("Generating PDF at:", pdf_path)
+
     generate_pdf(pdf_path, code=code, amount_eur=amount_eur, buyer_email=buyer_email)
 
-    # Guardar registro
     created_at = datetime.now(timezone.utc).isoformat()
     record = {
         "code": code,
@@ -314,39 +326,38 @@ log("Livemode:", event.get("livemode"))
         "stripe_session_id": session_id,
         "status": "issued"
     }
+
     db["giftcards"].append(record)
     save_db(db)
 
-    # Email
     subject = f"Tu Tarjeta Regalo {BRAND_NAME} · Día del Padre ({amount_eur}€)"
     body = f"""
     <div style="font-family:Arial,Helvetica,sans-serif; line-height:1.5">
-      <h2 style="margin:0 0 8px">¡Gracias por tu compra!</h2>
-      <p style="margin:0 0 12px">
-        Adjuntamos tu tarjeta regalo en PDF.
-      </p>
-      <p style="margin:0 0 12px">
-        <strong>Código:</strong> {code}<br/>
-        <strong>Importe:</strong> {amount_eur}€
-      </p>
-      <p style="margin:0 0 12px; color:#555">
-        Si necesitas que la reenviemos o tienes dudas, responde a este correo o escríbenos por WhatsApp.
-      </p>
+      <h2>¡Gracias por tu compra!</h2>
+      <p>Adjuntamos tu tarjeta regalo en PDF.</p>
+      <p><strong>Código:</strong> {code}<br/>
+         <strong>Importe:</strong> {amount_eur}€</p>
     </div>
     """
 
     try:
-        send_email_with_pdf(to_email=buyer_email, subject=subject, body=body, pdf_path=pdf_path)
+        log("Sending email...")
+        send_email_with_pdf(
+            to_email=buyer_email,
+            subject=subject,
+            body=body,
+            pdf_path=pdf_path
+        )
+        log("Email sent OK")
     except Exception as e:
-        # Marcamos como emitida pero sin email (para reintentar manualmente)
+        log("Email failed:", str(e))
         record["status"] = "issued_email_failed"
         record["email_error"] = str(e)
         save_db(db)
-        return jsonify({"ok": True, "email_sent": False, "error": str(e), "code": code}), 200
+        return jsonify({"ok": True, "email_sent": False, "error": str(e)}), 200
 
+    log("Webhook processed successfully")
     return jsonify({"ok": True, "email_sent": True, "code": code}), 200
-
-
 # (Opcional) endpoint de descarga por código
 @app.get("/giftcards/<code>")
 def download_giftcard(code: str):
