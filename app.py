@@ -1,7 +1,5 @@
 import os
 import json
-import hmac
-import hashlib
 import secrets
 import sys
 from datetime import datetime, timezone
@@ -15,7 +13,9 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+from sendgrid.helpers.mail import (
+    Mail, Attachment, FileContent, FileName, FileType, Disposition
+)
 
 load_dotenv()
 
@@ -32,12 +32,37 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")  # ej: https://tuapp.onrender
 PDF_DIR = os.getenv("PDF_DIR", "pdfs")
 DB_PATH = os.getenv("DB_PATH", "giftcards.json")
 
-# Validación mínima
-if not os.path.isdir(PDF_DIR):
-    os.makedirs(PDF_DIR, exist_ok=True)
-
 stripe.api_key = STRIPE_SECRET_KEY
 
+def log(*args):
+    print(*args, flush=True)
+    sys.stdout.flush()
+
+# ====== LOGS GLOBALES (clave para depurar) ======
+@app.before_request
+def _log_request():
+    log("=== INCOMING REQUEST ===")
+    log("Remote:", request.remote_addr)
+    log("Method:", request.method)
+    log("Path:", request.path)
+    log("Content-Type:", request.headers.get("Content-Type"))
+    log("User-Agent:", request.headers.get("User-Agent"))
+    log("Has Stripe-Signature:", bool(request.headers.get("Stripe-Signature")))
+    try:
+        log("Content-Length:", request.content_length)
+    except Exception:
+        pass
+
+@app.after_request
+def _log_response(resp):
+    log("=== RESPONSE ===", resp.status)
+    return resp
+
+@app.errorhandler(Exception)
+def _log_exception(e):
+    # Ojo: no exponemos detalles al cliente, pero sí los vemos en logs
+    log("!!! EXCEPTION !!!", repr(e))
+    return jsonify({"error": "internal_error"}), 500
 
 # ====== Utilidades ======
 def load_db():
@@ -55,10 +80,8 @@ def code_exists(code: str) -> bool:
     return any(gc.get("code") == code for gc in db.get("giftcards", []))
 
 def generate_gift_code(amount_eur: int) -> str:
-    # Ejemplo: TP-170-20260302-K4D9
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
-    # 4 chars seguros
-    suffix = secrets.token_hex(2).upper()  # 4 hex chars
+    suffix = secrets.token_hex(2).upper()
     prefix = "TP"
     return f"{prefix}-{amount_eur}-{date_str}-{suffix}"
 
@@ -67,16 +90,9 @@ def unique_code(amount_eur: int) -> str:
         code = generate_gift_code(amount_eur)
         if not code_exists(code):
             return code
-    # muy improbable
     raise RuntimeError("No se pudo generar un código único")
 
 def plan_from_amount(amount_eur: int) -> dict:
-    """
-    Ajustado a tu promo:
-    Essential: 68€ -> ejemplo Peel & Glow (80€)
-    Signature: 170€ -> ejemplo PRP capilar (200€)
-    Prestige: 299€ -> ejemplo bótox (según valoración)
-    """
     if amount_eur == 68:
         return {
             "plan": "Essential",
@@ -102,101 +118,11 @@ def plan_from_amount(amount_eur: int) -> dict:
     }
 
 def euros_from_stripe_amount(amount_total: int, currency: str) -> int:
-    # Stripe envía amount_total en céntimos para EUR
     if currency.upper() == "EUR":
         return int(round(amount_total / 100))
-    # si usas otra moneda, ajusta
     return int(round(amount_total / 100))
 
-def log(*args):
-    print(*args, flush=True)
-    sys.stdout.flush()
-
-
 # ====== PDF ======
-def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
-    meta = plan_from_amount(amount_eur)
-    plan = meta["plan"]
-    promo_value = meta["promo_value"]
-    note = meta["note"]
-
-    c = canvas.Canvas(filepath, pagesize=A4)
-    w, h = A4
-
-    # Fondo premium simple (sin imágenes)
-    c.setFillColorRGB(0.03, 0.04, 0.07)
-    c.rect(0, 0, w, h, fill=1, stroke=0)
-
-    # “Tarjeta” interior
-    margin = 18 * mm
-    card_x, card_y = margin, margin
-    card_w, card_h = w - 2 * margin, h - 2 * margin
-
-    c.setFillColorRGB(0.05, 0.07, 0.12)
-    c.roundRect(card_x, card_y, card_w, card_h, 18, fill=1, stroke=0)
-
-    # Título
-    c.setFillColorRGB(0.92, 0.94, 1.0)
-    c.setFont("Helvetica-Bold", 24)
-    c.drawString(card_x + 18*mm, card_y + card_h - 28*mm, f"{BRAND_NAME} · Tarjeta Regalo")
-
-    c.setFont("Helvetica", 13)
-    c.setFillColorRGB(0.78, 0.82, 0.92)
-    c.drawString(card_x + 18*mm, card_y + card_h - 38*mm, "Edición Día del Padre")
-
-    # Plan + Importe
-    c.setFillColorRGB(0.95, 0.83, 0.54)  # dorado
-    c.setFont("Helvetica-Bold", 18)
-    c.drawString(card_x + 18*mm, card_y + card_h - 58*mm, f"{plan}")
-
-    c.setFont("Helvetica-Bold", 34)
-    c.drawRightString(card_x + card_w - 18*mm, card_y + card_h - 58*mm, f"{amount_eur}€")
-
-    # Código
-    c.setFillColorRGB(0.92, 0.94, 1.0)
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(card_x + 18*mm, card_y + card_h - 78*mm, "Código")
-    c.setFont("Helvetica", 14)
-    c.drawString(card_x + 18*mm, card_y + card_h - 88*mm, code)
-
-    # Beneficio promo (texto)
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(card_x + 18*mm, card_y + card_h - 110*mm, "Beneficio promoción")
-    c.setFont("Helvetica", 12)
-    c.setFillColorRGB(0.78, 0.82, 0.92)
-
-    text = c.beginText(card_x + 18*mm, card_y + card_h - 122*mm)
-    text.setLeading(16)
-    for line in wrap_text(f"{promo_value}. {note}", 85):
-        text.textLine(line)
-    c.drawText(text)
-
-    # Instrucciones
-    c.setFillColorRGB(0.92, 0.94, 1.0)
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(card_x + 18*mm, card_y + 62*mm, "Cómo canjear")
-    c.setFillColorRGB(0.78, 0.82, 0.92)
-    c.setFont("Helvetica", 12)
-
-    canje = [
-        "1) Reserva tu cita.",
-        "2) Indica este código al equipo.",
-        "3) Se descontará del total hasta el importe de la tarjeta."
-    ]
-    y = card_y + 54*mm
-    for line in canje:
-        c.drawString(card_x + 18*mm, y, line)
-        y -= 8*mm
-
-    # Pie
-    c.setFillColorRGB(0.62, 0.66, 0.78)
-    c.setFont("Helvetica", 10)
-    c.drawString(card_x + 18*mm, card_y + 18*mm, f"Comprador: {buyer_email}")
-    c.drawRightString(card_x + card_w - 18*mm, card_y + 18*mm, "No canjeable por dinero. Sujeto a disponibilidad y valoración.")
-
-    c.showPage()
-    c.save()
-
 def wrap_text(s: str, max_chars: int):
     words = s.split()
     lines, current = [], []
@@ -213,6 +139,81 @@ def wrap_text(s: str, max_chars: int):
         lines.append(" ".join(current))
     return lines
 
+def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
+    meta = plan_from_amount(amount_eur)
+    plan = meta["plan"]
+    promo_value = meta["promo_value"]
+    note = meta["note"]
+
+    c = canvas.Canvas(filepath, pagesize=A4)
+    w, h = A4
+
+    c.setFillColorRGB(0.03, 0.04, 0.07)
+    c.rect(0, 0, w, h, fill=1, stroke=0)
+
+    margin = 18 * mm
+    card_x, card_y = margin, margin
+    card_w, card_h = w - 2 * margin, h - 2 * margin
+
+    c.setFillColorRGB(0.05, 0.07, 0.12)
+    c.roundRect(card_x, card_y, card_w, card_h, 18, fill=1, stroke=0)
+
+    c.setFillColorRGB(0.92, 0.94, 1.0)
+    c.setFont("Helvetica-Bold", 24)
+    c.drawString(card_x + 18*mm, card_y + card_h - 28*mm, f"{BRAND_NAME} · Tarjeta Regalo")
+
+    c.setFont("Helvetica", 13)
+    c.setFillColorRGB(0.78, 0.82, 0.92)
+    c.drawString(card_x + 18*mm, card_y + card_h - 38*mm, "Edición Día del Padre")
+
+    c.setFillColorRGB(0.95, 0.83, 0.54)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(card_x + 18*mm, card_y + card_h - 58*mm, f"{plan}")
+
+    c.setFont("Helvetica-Bold", 34)
+    c.drawRightString(card_x + card_w - 18*mm, card_y + card_h - 58*mm, f"{amount_eur}€")
+
+    c.setFillColorRGB(0.92, 0.94, 1.0)
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(card_x + 18*mm, card_y + card_h - 78*mm, "Código")
+    c.setFont("Helvetica", 14)
+    c.drawString(card_x + 18*mm, card_y + card_h - 88*mm, code)
+
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(card_x + 18*mm, card_y + card_h - 110*mm, "Beneficio promoción")
+    c.setFont("Helvetica", 12)
+    c.setFillColorRGB(0.78, 0.82, 0.92)
+
+    text = c.beginText(card_x + 18*mm, card_y + card_h - 122*mm)
+    text.setLeading(16)
+    for line in wrap_text(f"{promo_value}. {note}", 85):
+        text.textLine(line)
+    c.drawText(text)
+
+    c.setFillColorRGB(0.92, 0.94, 1.0)
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(card_x + 18*mm, card_y + 62*mm, "Cómo canjear")
+    c.setFillColorRGB(0.78, 0.82, 0.92)
+    c.setFont("Helvetica", 12)
+
+    canje = [
+        "1) Reserva tu cita.",
+        "2) Indica este código al equipo.",
+        "3) Se descontará del total hasta el importe de la tarjeta."
+    ]
+    y = card_y + 54*mm
+    for line in canje:
+        c.drawString(card_x + 18*mm, y, line)
+        y -= 8*mm
+
+    c.setFillColorRGB(0.62, 0.66, 0.78)
+    c.setFont("Helvetica", 10)
+    c.drawString(card_x + 18*mm, card_y + 18*mm, f"Comprador: {buyer_email}")
+    c.drawRightString(card_x + card_w - 18*mm, card_y + 18*mm,
+                      "No canjeable por dinero. Sujeto a disponibilidad y valoración.")
+
+    c.showPage()
+    c.save()
 
 # ====== EMAIL (SendGrid) ======
 def send_email_with_pdf(to_email: str, subject: str, body: str, pdf_path: str):
@@ -243,19 +244,18 @@ def send_email_with_pdf(to_email: str, subject: str, body: str, pdf_path: str):
     sg = SendGridAPIClient(SENDGRID_API_KEY)
     sg.send(message)
 
-
 # ====== WEBHOOK ======
 @app.route("/stripe/webhook", methods=["POST"], strict_slashes=False)
 def stripe_webhook():
+    # Logs específicos del webhook
     payload = request.get_data(as_text=False)
     sig_header = request.headers.get("Stripe-Signature", "")
 
     log("=== STRIPE WEBHOOK HIT ===")
-    log("Method:", request.method)
-    log("Path:", request.path)
-    log("Content-Type:", request.headers.get("Content-Type"))
-    log("Stripe-Signature present:", bool(sig_header))
     log("Payload bytes:", len(payload) if payload else 0)
+    log("Stripe-Signature present:", bool(sig_header))
+    log("Webhook secret present:", bool(STRIPE_WEBHOOK_SECRET))
+    log("Stripe key starts with:", (STRIPE_SECRET_KEY[:7] + "...") if STRIPE_SECRET_KEY else "EMPTY")
 
     try:
         event = stripe.Webhook.construct_event(
@@ -263,55 +263,40 @@ def stripe_webhook():
             sig_header=sig_header,
             secret=STRIPE_WEBHOOK_SECRET
         )
-
         log("Event type:", event.get("type"))
         log("Livemode:", event.get("livemode"))
-
     except Exception as e:
-        log("Webhook signature error:", str(e))
+        log("Webhook construct_event FAILED:", repr(e))
         return jsonify({"error": f"Webhook error: {str(e)}"}), 400
 
-    # Solo procesamos el evento clave
-    if event["type"] != "checkout.session.completed":
-        log("Ignored event:", event["type"])
-        return jsonify({"received": True, "ignored": event["type"]}), 200
+    if event.get("type") != "checkout.session.completed":
+        return jsonify({"received": True, "ignored": event.get("type")}), 200
 
     session = event["data"]["object"]
 
-    buyer_email = (
-        session.get("customer_details", {}) or {}
-    ).get("email") or session.get("customer_email") or None
-
-    log("Buyer email:", buyer_email)
-
+    buyer_email = (session.get("customer_details") or {}).get("email") or session.get("customer_email")
     if not buyer_email:
-        log("ERROR: No buyer email in session")
         return jsonify({"error": "No buyer email in session"}), 400
 
     amount_total = session.get("amount_total")
     currency = (session.get("currency") or "eur").upper()
-
-    log("Amount_total:", amount_total, "Currency:", currency)
-
     if amount_total is None:
         return jsonify({"error": "No amount_total in session"}), 400
 
     amount_eur = euros_from_stripe_amount(amount_total, currency)
-    log("Computed amount_eur:", amount_eur)
+
+    # Asegura directorios en runtime (Render)
+    if not os.path.isdir(PDF_DIR):
+        os.makedirs(PDF_DIR, exist_ok=True)
 
     session_id = session.get("id")
-    log("Session ID:", session_id)
-
     db = load_db()
     if any(gc.get("stripe_session_id") == session_id for gc in db.get("giftcards", [])):
-        log("Duplicate session detected")
         return jsonify({"ok": True, "deduped": True}), 200
 
     code = unique_code(amount_eur)
     pdf_filename = f"giftcard_{code}.pdf"
     pdf_path = os.path.join(PDF_DIR, pdf_filename)
-
-    log("Generating PDF at:", pdf_path)
 
     generate_pdf(pdf_path, code=code, amount_eur=amount_eur, buyer_email=buyer_email)
 
@@ -326,39 +311,35 @@ def stripe_webhook():
         "stripe_session_id": session_id,
         "status": "issued"
     }
-
     db["giftcards"].append(record)
     save_db(db)
 
     subject = f"Tu Tarjeta Regalo {BRAND_NAME} · Día del Padre ({amount_eur}€)"
     body = f"""
     <div style="font-family:Arial,Helvetica,sans-serif; line-height:1.5">
-      <h2>¡Gracias por tu compra!</h2>
-      <p>Adjuntamos tu tarjeta regalo en PDF.</p>
-      <p><strong>Código:</strong> {code}<br/>
-         <strong>Importe:</strong> {amount_eur}€</p>
+      <h2 style="margin:0 0 8px">¡Gracias por tu compra!</h2>
+      <p style="margin:0 0 12px">Adjuntamos tu tarjeta regalo en PDF.</p>
+      <p style="margin:0 0 12px">
+        <strong>Código:</strong> {code}<br/>
+        <strong>Importe:</strong> {amount_eur}€
+      </p>
+      <p style="margin:0 0 12px; color:#555">
+        Si necesitas que la reenviemos o tienes dudas, responde a este correo o escríbenos por WhatsApp.
+      </p>
     </div>
     """
 
     try:
-        log("Sending email...")
-        send_email_with_pdf(
-            to_email=buyer_email,
-            subject=subject,
-            body=body,
-            pdf_path=pdf_path
-        )
-        log("Email sent OK")
+        send_email_with_pdf(to_email=buyer_email, subject=subject, body=body, pdf_path=pdf_path)
     except Exception as e:
-        log("Email failed:", str(e))
         record["status"] = "issued_email_failed"
         record["email_error"] = str(e)
         save_db(db)
-        return jsonify({"ok": True, "email_sent": False, "error": str(e)}), 200
+        return jsonify({"ok": True, "email_sent": False, "error": str(e), "code": code}), 200
 
-    log("Webhook processed successfully")
     return jsonify({"ok": True, "email_sent": True, "code": code}), 200
-# (Opcional) endpoint de descarga por código
+
+# (Opcional) descarga por código
 @app.get("/giftcards/<code>")
 def download_giftcard(code: str):
     db = load_db()
@@ -370,12 +351,14 @@ def download_giftcard(code: str):
         abort(404)
     return send_file(pdf_path, as_attachment=True, download_name=os.path.basename(pdf_path))
 
-
 @app.get("/health")
 def health():
     return jsonify({"ok": True})
 
+@app.get("/")
+def root():
+    # Para que Render/visitas no den 404 y ensucien logs
+    return jsonify({"ok": True, "service": "giftcards-mvp"})
 
 if __name__ == "__main__":
-    # Para local
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
