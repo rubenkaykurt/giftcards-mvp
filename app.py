@@ -12,6 +12,7 @@ import stripe
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics  # ✅ para medir ancho real de texto
 
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import (
@@ -95,8 +96,11 @@ def load_db():
 
 
 def save_db(db):
-    with open(DB_PATH, "w", encoding="utf-8") as f:
+    # ✅ escritura atómica para evitar JSON corrupto si Render reinicia
+    tmp_path = DB_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, DB_PATH)
 
 
 def code_exists(code: str) -> bool:
@@ -146,26 +150,28 @@ def plan_from_amount(amount_eur: int) -> dict:
 
 
 def euros_from_stripe_amount(amount_total: int, currency: str) -> int:
-    # Stripe amounts are usually in the smallest currency unit (cents for EUR).
-    # Keep it simple: divide by 100 and round.
     return int(round(amount_total / 100))
 
 
 # ====== PDF ======
-def wrap_text(s: str, max_chars: int):
-    words = s.split()
-    lines, current = [], []
-    count = 0
+def wrap_text_width(text: str, font_name: str, font_size: int, max_width: float):
+    """Divide texto en líneas para que cada línea no supere max_width (en puntos)."""
+    words = text.split()
+    lines = []
+    current = ""
+
     for w in words:
-        if count + len(w) + (1 if current else 0) > max_chars:
-            lines.append(" ".join(current))
-            current = [w]
-            count = len(w)
+        test = f"{current} {w}".strip()
+        if pdfmetrics.stringWidth(test, font_name, font_size) <= max_width:
+            current = test
         else:
-            current.append(w)
-            count += len(w) + (1 if len(current) > 1 else 0)
+            if current:
+                lines.append(current)
+            current = w
+
     if current:
-        lines.append(" ".join(current))
+        lines.append(current)
+
     return lines
 
 
@@ -178,6 +184,7 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     c = canvas.Canvas(filepath, pagesize=A4)
     w, h = A4
 
+    # Fondo
     c.setFillColorRGB(0.03, 0.04, 0.07)
     c.rect(0, 0, w, h, fill=1, stroke=0)
 
@@ -185,44 +192,104 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     card_x, card_y = margin, margin
     card_w, card_h = w - 2 * margin, h - 2 * margin
 
+    # Tarjeta
     c.setFillColorRGB(0.05, 0.07, 0.12)
     c.roundRect(card_x, card_y, card_w, card_h, 18, fill=1, stroke=0)
 
+    pad_x = 18 * mm
+    left_x = card_x + pad_x
+    right_x = card_x + card_w - pad_x
+    max_text_width = right_x - left_x
+
+    # Header
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 24)
-    c.drawString(card_x + 18 * mm, card_y + card_h - 28 * mm, f"{BRAND_NAME} · Tarjeta Regalo")
+    c.drawString(left_x, card_y + card_h - 28 * mm, f"{BRAND_NAME} · Tarjeta Regalo")
 
     c.setFont("Helvetica", 13)
     c.setFillColorRGB(0.78, 0.82, 0.92)
-    c.drawString(card_x + 18 * mm, card_y + card_h - 38 * mm, "Edición Día del Padre")
+    c.drawString(left_x, card_y + card_h - 38 * mm, "Edición Día del Padre")
 
+    # Plan + precio
     c.setFillColorRGB(0.95, 0.83, 0.54)
     c.setFont("Helvetica-Bold", 18)
-    c.drawString(card_x + 18 * mm, card_y + card_h - 58 * mm, f"{plan}")
+    c.drawString(left_x, card_y + card_h - 58 * mm, f"{plan}")
 
     c.setFont("Helvetica-Bold", 34)
-    c.drawRightString(card_x + card_w - 18 * mm, card_y + card_h - 58 * mm, f"{amount_eur}€")
+    c.drawRightString(right_x, card_y + card_h - 58 * mm, f"{amount_eur}€")
 
+    # Código
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(card_x + 18 * mm, card_y + card_h - 78 * mm, "Código")
-    c.setFont("Helvetica", 14)
-    c.drawString(card_x + 18 * mm, card_y + card_h - 88 * mm, code)
+    c.drawString(left_x, card_y + card_h - 78 * mm, "Código")
 
+    c.setFont("Helvetica", 14)
+    c.drawString(left_x, card_y + card_h - 88 * mm, code)
+
+    # Beneficio promoción (wrap por ancho real)
+    benefit_title_y = card_y + card_h - 110 * mm
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(card_x + 18 * mm, card_y + card_h - 110 * mm, "Beneficio promoción")
-    c.setFont("Helvetica", 12)
+    c.setFillColorRGB(0.92, 0.94, 1.0)
+    c.drawString(left_x, benefit_title_y, "Beneficio promoción")
+
+    benefit_text = f"{promo_value}. {note}"
+    benefit_font = "Helvetica"
+    benefit_size = 12
+    leading = 16
+
+    c.setFont(benefit_font, benefit_size)
     c.setFillColorRGB(0.78, 0.82, 0.92)
 
-    text = c.beginText(card_x + 18 * mm, card_y + card_h - 122 * mm)
-    text.setLeading(16)
-    for line in wrap_text(f"{promo_value}. {note}", 85):
-        text.textLine(line)
-    c.drawText(text)
+    benefit_lines = wrap_text_width(
+        benefit_text,
+        font_name=benefit_font,
+        font_size=benefit_size,
+        max_width=max_text_width
+    )
+
+    benefit_start_y = benefit_title_y - 12
+    text_obj = c.beginText(left_x, benefit_start_y)
+    text_obj.setLeading(leading)
+    for line in benefit_lines:
+        text_obj.textLine(line)
+    c.drawText(text_obj)
+
+    benefit_block_height = len(benefit_lines) * leading
+    after_benefit_y = benefit_start_y - benefit_block_height
+
+    # Footer (evitar solape)
+    footer_y = card_y + 18 * mm
+    footer_font = "Helvetica"
+    footer_size = 10
+    c.setFont(footer_font, footer_size)
+    c.setFillColorRGB(0.62, 0.66, 0.78)
+
+    left_footer = f"Comprador: {buyer_email}"
+    right_footer = "No canjeable por dinero. Sujeto a disponibilidad y valoración."
+
+    gap = 10
+    left_w = pdfmetrics.stringWidth(left_footer, footer_font, footer_size)
+    right_w = pdfmetrics.stringWidth(right_footer, footer_font, footer_size)
+
+    if left_x + left_w + gap > right_x - right_w:
+        c.drawString(left_x, footer_y + 10, left_footer)
+        c.drawRightString(right_x, footer_y, right_footer)
+        safe_bottom_for_content = footer_y + 22
+    else:
+        c.drawString(left_x, footer_y, left_footer)
+        c.drawRightString(right_x, footer_y, right_footer)
+        safe_bottom_for_content = footer_y + 14
+
+    # Cómo canjear (posición dinámica)
+    canjear_title_y = max(card_y + 62 * mm, after_benefit_y - 35)
+    min_canjear_title_y = safe_bottom_for_content + 60
+    if canjear_title_y < min_canjear_title_y:
+        canjear_title_y = min_canjear_title_y
 
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(card_x + 18 * mm, card_y + 62 * mm, "Cómo canjear")
+    c.drawString(left_x, canjear_title_y, "Cómo canjear")
+
     c.setFillColorRGB(0.78, 0.82, 0.92)
     c.setFont("Helvetica", 12)
 
@@ -231,19 +298,10 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
         "2) Indica este código al equipo.",
         "3) Se descontará del total hasta el importe de la tarjeta."
     ]
-    y = card_y + 54 * mm
+    y = canjear_title_y - 10 * mm
     for line in canje:
-        c.drawString(card_x + 18 * mm, y, line)
+        c.drawString(left_x, y, line)
         y -= 8 * mm
-
-    c.setFillColorRGB(0.62, 0.66, 0.78)
-    c.setFont("Helvetica", 10)
-    c.drawString(card_x + 18 * mm, card_y + 18 * mm, f"Comprador: {buyer_email}")
-    c.drawRightString(
-        card_x + card_w - 18 * mm,
-        card_y + 18 * mm,
-        "No canjeable por dinero. Sujeto a disponibilidad y valoración."
-    )
 
     c.showPage()
     c.save()
@@ -319,7 +377,6 @@ def stripe_webhook():
 
     amount_eur = euros_from_stripe_amount(amount_total, currency)
 
-    # Asegura directorios en runtime (Render)
     if not os.path.isdir(PDF_DIR):
         os.makedirs(PDF_DIR, exist_ok=True)
 
@@ -369,7 +426,6 @@ def stripe_webhook():
         record["status"] = "issued_email_failed"
         record["email_error"] = str(e)
         save_db(db)
-        # Stripe ya recibió el evento, devolvemos 200 para evitar reintentos por email
         return jsonify({"ok": True, "email_sent": False, "error": str(e), "code": code}), 200
 
     return jsonify({"ok": True, "email_sent": True, "code": code}), 200
@@ -386,6 +442,7 @@ def download_giftcard(code: str):
     if not pdf_path or not os.path.exists(pdf_path):
         abort(404)
     return send_file(pdf_path, as_attachment=True, download_name=os.path.basename(pdf_path))
+
 
 @app.route("/health", methods=["GET", "HEAD"])
 def health():
