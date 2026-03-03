@@ -3,6 +3,7 @@ import json
 import hmac
 import hashlib
 import secrets
+import sys
 from datetime import datetime, timezone
 
 from flask import Flask, request, send_file, abort, jsonify
@@ -106,6 +107,10 @@ def euros_from_stripe_amount(amount_total: int, currency: str) -> int:
         return int(round(amount_total / 100))
     # si usas otra moneda, ajusta
     return int(round(amount_total / 100))
+
+def log(*args):
+    print(*args, flush=True)
+    sys.stdout.flush()
 
 
 # ====== PDF ======
@@ -240,17 +245,25 @@ def send_email_with_pdf(to_email: str, subject: str, body: str, pdf_path: str):
 
 
 # ====== WEBHOOK ======
-@app.post("/stripe/webhook")
+@app.route("/stripe/webhook", methods=["POST"], strict_slashes=False)
 def stripe_webhook():
     payload = request.get_data(as_text=False)
     sig_header = request.headers.get("Stripe-Signature", "")
-
+log("=== STRIPE WEBHOOK HIT ===")
+log("Method:", request.method)
+log("Path:", request.path)
+log("Content-Type:", request.headers.get("Content-Type"))
+log("Stripe-Signature present:", bool(sig_header))
+log("Payload bytes:", len(payload) if payload else 0)
     try:
         event = stripe.Webhook.construct_event(
             payload=payload,
             sig_header=sig_header,
             secret=STRIPE_WEBHOOK_SECRET
         )
+
+        log("Event type:", event.get("type"))
+log("Livemode:", event.get("livemode"))
     except Exception as e:
         # Firma inválida o payload corrupto
         return jsonify({"error": f"Webhook error: {str(e)}"}), 400
