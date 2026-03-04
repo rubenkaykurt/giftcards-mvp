@@ -30,6 +30,8 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "")
 BRAND_NAME = os.getenv("BRAND_NAME", "Terapyel")
+GIFT_BG_IMAGE = os.getenv("GIFT_BG_IMAGE", "assets/giftcard_bg.png")
+GIFT_BG_MODE = os.getenv("GIFT_BG_MODE", "card")
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")  # ej: https://tuapp.onrender.com
 PDF_DIR = os.getenv("PDF_DIR", "pdfs")
