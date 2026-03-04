@@ -235,7 +235,7 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     benefit_text = f"{promo_value}. {note}"
     benefit_font = "Helvetica"
     benefit_size = 12
-    leading = 16
+    leading = 20
 
     c.setFont(benefit_font, benefit_size)
     c.setFillColorRGB(0.78, 0.82, 0.92)
