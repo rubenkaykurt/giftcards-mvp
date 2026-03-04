@@ -43,6 +43,12 @@ stripe.api_key = STRIPE_SECRET_KEY
 
 SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "")
 
+GIFT_PAYMENT_LINKS = [
+    "plink_1T6c9kGX2pDFXvsUAMbtXgXu",
+    "plink_1T6c85GX2pDFXvsU1kzTrqAi",
+    "plink_1T6c2vGX2pDFXvsUztNJ3wT1",
+    "plink_1T6t2uGX2pDFXvsUA9tTz26e"
+]
 
 def log(*args):
     print(*args, flush=True)
@@ -404,6 +410,11 @@ def stripe_webhook():
         return jsonify({"received": True, "ignored": event.get("type")}), 200
 
     session = event["data"]["object"]
+    payment_link_id = session.get("payment_link")
+
+    if payment_link_id not in GIFT_PAYMENT_LINKS:
+        log("Ignoring payment from non-giftcard payment link:", payment_link_id)
+        return jsonify({"received": True, "ignored": "not_giftcard"}), 200
 
     buyer_email = (session.get("customer_details") or {}).get("email") or session.get("customer_email")
     if not buyer_email:
