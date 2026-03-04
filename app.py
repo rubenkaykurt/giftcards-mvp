@@ -154,17 +154,14 @@ def euros_from_stripe_amount(amount_total: int, currency: str) -> int:
 
 # ====== PDF HELPERS ======
 def wrap_text_width(text: str, font_name: str, font_size: int, max_width: float):
-    """Wrap por ancho REAL (mejor que max_chars)."""
     words = (text or "").split()
-    if not words:
-        return [""]
-
     lines = []
     current = ""
+
     for w in words:
-        test = w if not current else f"{current} {w}"
-        if pdfmetrics.stringWidth(test, font_name, font_size) <= max_width:
-            current = test
+        candidate = (current + " " + w).strip()
+        if stringWidth(candidate, font_name, font_size) <= max_width:
+            current = candidate
         else:
             if current:
                 lines.append(current)
@@ -183,79 +180,77 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     c = canvas.Canvas(filepath, pagesize=A4)
     w, h = A4
 
+    # ====== Layout base (capa 2) ======
     margin = 18 * mm
     card_x, card_y = margin, margin
     card_w, card_h = w - 2 * margin, h - 2 * margin
 
-    # ====== CAPA 1: Fondo PNG (si existe) ======
+    # Padding interno del texto dentro de la tarjeta
+    inner_pad_x = 18 * mm
+    left_x = card_x + inner_pad_x
+    right_x = card_x + card_w - inner_pad_x
+    max_text_width = right_x - left_x
+
+    # ====== CAPA 1: Fondo PNG (A4 exacto) ======
     bg_drawn = False
     if GIFT_BG_IMAGE and os.path.exists(GIFT_BG_IMAGE):
         try:
             bg = ImageReader(GIFT_BG_IMAGE)
 
-            if (GIFT_BG_MODE or "").lower() == "page":
-                c.drawImage(
-                    bg, 0, 0,
-                    width=w, height=h,
-                    preserveAspectRatio=True,
-                    anchor="c",
-                    mask="auto"
-                )
-            else:
-                c.drawImage(
-                    bg, card_x, card_y,
-                    width=card_w, height=card_h,
-                    preserveAspectRatio=True,
-                    anchor="c",
-                    mask="auto"
-                )
+            # IMPORTANTÍSIMO: llenar A4 exacto para que las coords coincidan
+            c.drawImage(
+                bg,
+                0, 0,
+                width=w,
+                height=h,
+                preserveAspectRatio=False,
+                mask="auto"
+            )
             bg_drawn = True
         except Exception as e:
             log("Error loading background:", repr(e))
 
-    # ====== Fallback / overlay base (solo si NO hay PNG en modo card) ======
+    # fallback si no hay imagen
     if not bg_drawn:
-        # fondo de página
         c.setFillColorRGB(0.03, 0.04, 0.07)
         c.rect(0, 0, w, h, fill=1, stroke=0)
-
-    # ⚠️ Esto TAPARÍA el PNG si está en modo "card". Solo lo dibujamos si NO hay PNG card.
-    if not (bg_drawn and (GIFT_BG_MODE or "").lower() == "card"):
         c.setFillColorRGB(0.05, 0.07, 0.12)
         c.roundRect(card_x, card_y, card_w, card_h, 18, fill=1, stroke=0)
 
     # ====== CAPA 2: Texto ======
-    left_x = card_x + 18 * mm
-    right_x = card_x + card_w - 18 * mm
-    max_text_width = card_w - 36 * mm
-
     # Título
+    title_y = card_y + card_h - 28 * mm
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 24)
-    c.drawString(left_x, card_y + card_h - 28 * mm, f"{BRAND_NAME} · Tarjeta Regalo")
+    c.drawString(left_x, title_y, f"{BRAND_NAME} · Tarjeta Regalo")
 
+    # Subtítulo
+    subtitle_y = title_y - 10 * mm
     c.setFont("Helvetica", 13)
     c.setFillColorRGB(0.78, 0.82, 0.92)
-    c.drawString(left_x, card_y + card_h - 38 * mm, "Edición Día del Padre")
+    c.drawString(left_x, subtitle_y, "Edición Día del Padre")
 
-    # Plan + Importe
+    # Plan + importe
+    plan_y = subtitle_y - 20 * mm
     c.setFillColorRGB(0.95, 0.83, 0.54)
     c.setFont("Helvetica-Bold", 18)
-    c.drawString(left_x, card_y + card_h - 58 * mm, f"{plan}")
+    c.drawString(left_x, plan_y, f"{plan}")
 
     c.setFont("Helvetica-Bold", 34)
-    c.drawRightString(right_x, card_y + card_h - 58 * mm, f"{amount_eur}€")
+    c.drawRightString(right_x, plan_y, f"{amount_eur}€")
 
     # Código
+    code_title_y = plan_y - 22 * mm
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(left_x, card_y + card_h - 78 * mm, "Código")
+    c.drawString(left_x, code_title_y, "Código")
 
+    code_value_y = code_title_y - 10 * mm
     c.setFont("Helvetica", 14)
-    c.drawString(left_x, card_y + card_h - 88 * mm, code)
+    c.drawString(left_x, code_value_y, code)
 
     # Beneficio promoción
-    benefit_title_y = card_y + card_h - 110 * mm
+    benefit_title_y = code_value_y - 26 * mm
     c.setFont("Helvetica-Bold", 14)
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.drawString(left_x, benefit_title_y, "Beneficio promoción")
@@ -263,7 +258,7 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     benefit_text = f"{promo_value}. {note}"
     benefit_font = "Helvetica"
     benefit_size = 12
-    leading = 18  # ↑ más espaciado entre líneas
+    leading = 16  # separación entre líneas del párrafo
 
     c.setFont(benefit_font, benefit_size)
     c.setFillColorRGB(0.78, 0.82, 0.92)
@@ -275,28 +270,27 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
         max_width=max_text_width
     )
 
-    benefit_start_y = benefit_title_y - 18  # ↑ más espacio bajo el título
+    # MÁS aire entre título y texto (esto era lo que preguntaste)
+    benefit_start_y = benefit_title_y - 6 * mm
     text_obj = c.beginText(left_x, benefit_start_y)
     text_obj.setLeading(leading)
     for line in benefit_lines:
         text_obj.textLine(line)
     c.drawText(text_obj)
 
-    after_benefit_y = benefit_start_y - leading * len(benefit_lines)
+    # dónde acaba el bloque de beneficio
+    benefit_end_y = benefit_start_y - leading * len(benefit_lines)
 
-    # Footer (reservamos espacio para que no solape)
-    safe_bottom = card_y + 18 * mm
-    footer_y = safe_bottom
-    footer_safe_top = footer_y + 14  # altura aproximada del footer
+    # ====== Zona reservada para la imagen del diseño (la foto) ======
+    # Ajusta estos 2 números si el diseñador mueve la foto:
+    photo_top_y = card_y + 95 * mm
+    photo_bottom_y = card_y + 60 * mm
 
-    # Cómo canjear (más abajo / dinámico, sin invadir footer)
-    canjear_title_y = card_y + 62 * mm
-    # intenta colocarlo relativamente abajo pero sin invadir el footer
-    min_canjear_title_y = footer_safe_top + 60
-    # y si el bloque de beneficio baja mucho, ajusta
-    canjear_title_y = max(canjear_title_y, after_benefit_y - 35)
-    if canjear_title_y < min_canjear_title_y:
-        canjear_title_y = min_canjear_title_y
+    # ====== Cómo canjear (SIEMPRE arriba de la foto) ======
+    # Colócalo entre el final del beneficio y el inicio de la foto
+    canjear_title_y = min(benefit_end_y - 10 * mm, photo_top_y - 10 * mm)
+    # pero que no suba demasiado (evita que se pegue arriba si el texto de beneficio es corto)
+    canjear_title_y = max(canjear_title_y, card_y + 110 * mm)
 
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 14)
@@ -312,12 +306,11 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     ]
     y = canjear_title_y - 10 * mm
     for line in canje:
-        if y <= footer_safe_top:
-            break
         c.drawString(left_x, y, line)
         y -= 8 * mm
 
-    # Footer final (siempre al fondo)
+    # Footer (debajo, sin solapar)
+    footer_y = card_y + 18 * mm
     c.setFillColorRGB(0.62, 0.66, 0.78)
     c.setFont("Helvetica", 10)
     c.drawString(left_x, footer_y, f"Comprador: {buyer_email}")
