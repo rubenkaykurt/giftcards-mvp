@@ -14,6 +14,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
 
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import (
