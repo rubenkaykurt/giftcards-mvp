@@ -41,6 +41,8 @@ GIFT_BG_MODE = os.getenv("GIFT_BG_MODE", "card")  # "card" o "page"
 
 stripe.api_key = STRIPE_SECRET_KEY
 
+SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "")
+
 
 def log(*args):
     print(*args, flush=True)
@@ -354,6 +356,25 @@ def send_email_with_pdf(to_email: str, subject: str, body: str, pdf_path: str):
     sg = SendGridAPIClient(SENDGRID_API_KEY)
     sg.send(message)
 
+def push_to_google_sheets(fecha_iso: str, codigo: str, cliente: str, importe: int):
+    if not SHEETS_WEBHOOK_URL:
+        log("SHEETS_WEBHOOK_URL vacío: no se envía a Google Sheets")
+        return
+
+    payload = {
+        "fecha": fecha_iso,
+        "codigo": codigo,
+        "cliente": cliente,
+        "importe": importe
+    }
+
+    try:
+        import requests
+        r = requests.post(SHEETS_WEBHOOK_URL, json=payload, timeout=10)
+        log("Sheets push status:", r.status_code, "resp:", r.text[:200])
+    except Exception as e:
+        # Importante: NO romper el webhook de Stripe por culpa de Sheets
+        log("Sheets push FAILED:", repr(e))
 
 # ====== WEBHOOK ======
 @app.route("/stripe/webhook", methods=["POST"], strict_slashes=False)
@@ -422,6 +443,12 @@ def stripe_webhook():
     }
     db["giftcards"].append(record)
     save_db(db)
+    push_to_google_sheets(
+        fecha_iso=created_at,
+        codigo=code,
+        cliente=buyer_email,
+        importe=amount_eur
+    )
 
     subject = f"Tu Tarjeta Regalo {BRAND_NAME} · Día del Padre ({amount_eur}€)"
     body = f"""
