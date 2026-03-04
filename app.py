@@ -317,7 +317,7 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     c.drawString(left_x, footer_y, f"Comprador: {buyer_email}")
     c.drawRightString(
         right_x,
-        footer_y,
+        footer_y - 10,
         "No canjeable por dinero. Sujeto a disponibilidad y valoración."
     )
 
