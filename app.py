@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from flask import Flask, request, send_file, abort, jsonify
 from dotenv import load_dotenv
 from werkzeug.exceptions import HTTPException
+from reportlab.lib.utils import ImageReader
 
 import stripe
 from reportlab.lib.pagesizes import A4
@@ -184,13 +185,49 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     c = canvas.Canvas(filepath, pagesize=A4)
     w, h = A4
 
-    # Fondo
-    c.setFillColorRGB(0.03, 0.04, 0.07)
-    c.rect(0, 0, w, h, fill=1, stroke=0)
-
     margin = 18 * mm
     card_x, card_y = margin, margin
     card_w, card_h = w - 2 * margin, h - 2 * margin
+    # ====== FONDO PNG ======
+    bg_drawn = False
+
+    if GIFT_BG_IMAGE and os.path.exists(GIFT_BG_IMAGE):
+        try:
+            bg = ImageReader(GIFT_BG_IMAGE)
+
+            if GIFT_BG_MODE.lower() == "page":
+                # fondo para A4 completo
+                c.drawImage(
+                    bg,
+                    0, 0,
+                    width=w,
+                    height=h,
+                    preserveAspectRatio=True,
+                    anchor="c",
+                    mask='auto'
+                )
+            else:
+                # fondo para la tarjeta interior
+                c.drawImage(
+                    bg,
+                    card_x,
+                    card_y,
+                    width=card_w,
+                    height=card_h,
+                    preserveAspectRatio=True,
+                    anchor="c",
+                    mask='auto'
+                )
+
+            bg_drawn = True
+
+        except Exception as e:
+            log("Error loading background:", repr(e))
+
+    # fallback si no hay imagen
+    if not bg_drawn:
+        c.setFillColorRGB(0.03, 0.04, 0.07)
+        c.rect(0, 0, w, h, fill=1, stroke=0)
 
     # Tarjeta
     c.setFillColorRGB(0.05, 0.07, 0.12)
