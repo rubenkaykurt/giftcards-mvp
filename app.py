@@ -7,13 +7,13 @@ from datetime import datetime, timezone
 from flask import Flask, request, send_file, abort, jsonify
 from dotenv import load_dotenv
 from werkzeug.exceptions import HTTPException
-from reportlab.lib.utils import ImageReader
 
 import stripe
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics  # ✅ para medir ancho real de texto
+from reportlab.pdfbase import pdfmetrics
+from reportlab.lib.utils import ImageReader
 
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import (
@@ -30,12 +30,13 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "")
 BRAND_NAME = os.getenv("BRAND_NAME", "Terapyel")
-GIFT_BG_IMAGE = os.getenv("GIFT_BG_IMAGE", "assets/giftcard_bg.png")
-GIFT_BG_MODE = os.getenv("GIFT_BG_MODE", "card")
 
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")  # ej: https://tuapp.onrender.com
 PDF_DIR = os.getenv("PDF_DIR", "pdfs")
 DB_PATH = os.getenv("DB_PATH", "giftcards.json")
+
+# Fondo PNG (opcional)
+GIFT_BG_IMAGE = os.getenv("GIFT_BG_IMAGE", "assets/giftcard_bg.png")
+GIFT_BG_MODE = os.getenv("GIFT_BG_MODE", "card")  # "card" o "page"
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -45,7 +46,7 @@ def log(*args):
     sys.stdout.flush()
 
 
-# ====== LOGS GLOBALES (clave para depurar) ======
+# ====== LOGS GLOBALES ======
 @app.before_request
 def _log_request():
     log("=== INCOMING REQUEST ===")
@@ -67,8 +68,7 @@ def _log_response(resp):
     return resp
 
 
-# ✅ FIX: no “comerse” 404/405/400 de Flask.
-# Solo capturar excepciones no-HTTP y devolver 500.
+# ✅ no “comerse” 404/405/400 de Flask.
 @app.errorhandler(Exception)
 def _log_exception(e):
     log("!!! EXCEPTION !!!", repr(e))
@@ -77,7 +77,7 @@ def _log_exception(e):
     return jsonify({"error": "internal_error"}), 500
 
 
-# ====== Utilidades ======
+# ====== DB ======
 def load_db():
     if not os.path.exists(DB_PATH):
         return {"giftcards": []}
@@ -99,11 +99,8 @@ def load_db():
 
 
 def save_db(db):
-    # ✅ escritura atómica para evitar JSON corrupto si Render reinicia
-    tmp_path = DB_PATH + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    with open(DB_PATH, "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, DB_PATH)
 
 
 def code_exists(code: str) -> bool:
@@ -114,8 +111,7 @@ def code_exists(code: str) -> bool:
 def generate_gift_code(amount_eur: int) -> str:
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
     suffix = secrets.token_hex(2).upper()
-    prefix = "TP"
-    return f"{prefix}-{amount_eur}-{date_str}-{suffix}"
+    return f"TP-{amount_eur}-{date_str}-{suffix}"
 
 
 def unique_code(amount_eur: int) -> str:
@@ -156,25 +152,25 @@ def euros_from_stripe_amount(amount_total: int, currency: str) -> int:
     return int(round(amount_total / 100))
 
 
-# ====== PDF ======
+# ====== PDF HELPERS ======
 def wrap_text_width(text: str, font_name: str, font_size: int, max_width: float):
-    """Divide texto en líneas para que cada línea no supere max_width (en puntos)."""
-    words = text.split()
+    """Wrap por ancho REAL (mejor que max_chars)."""
+    words = (text or "").split()
+    if not words:
+        return [""]
+
     lines = []
     current = ""
-
     for w in words:
-        test = f"{current} {w}".strip()
+        test = w if not current else f"{current} {w}"
         if pdfmetrics.stringWidth(test, font_name, font_size) <= max_width:
             current = test
         else:
             if current:
                 lines.append(current)
             current = w
-
     if current:
         lines.append(current)
-
     return lines
 
 
@@ -190,57 +186,50 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     margin = 18 * mm
     card_x, card_y = margin, margin
     card_w, card_h = w - 2 * margin, h - 2 * margin
-    # ====== FONDO PNG ======
-    bg_drawn = False
 
+    # ====== CAPA 1: Fondo PNG (si existe) ======
+    bg_drawn = False
     if GIFT_BG_IMAGE and os.path.exists(GIFT_BG_IMAGE):
         try:
             bg = ImageReader(GIFT_BG_IMAGE)
 
-            if GIFT_BG_MODE.lower() == "page":
-                # fondo para A4 completo
+            if (GIFT_BG_MODE or "").lower() == "page":
                 c.drawImage(
-                    bg,
-                    0, 0,
-                    width=w,
-                    height=h,
+                    bg, 0, 0,
+                    width=w, height=h,
                     preserveAspectRatio=True,
                     anchor="c",
-                    mask='auto'
+                    mask="auto"
                 )
             else:
-                # fondo para la tarjeta interior
                 c.drawImage(
-                    bg,
-                    card_x,
-                    card_y,
-                    width=card_w,
-                    height=card_h,
+                    bg, card_x, card_y,
+                    width=card_w, height=card_h,
                     preserveAspectRatio=True,
                     anchor="c",
-                    mask='auto'
+                    mask="auto"
                 )
-
             bg_drawn = True
-
         except Exception as e:
             log("Error loading background:", repr(e))
 
-    # fallback si no hay imagen
+    # ====== Fallback / overlay base (solo si NO hay PNG en modo card) ======
     if not bg_drawn:
+        # fondo de página
         c.setFillColorRGB(0.03, 0.04, 0.07)
         c.rect(0, 0, w, h, fill=1, stroke=0)
 
-    # Tarjeta
-    c.setFillColorRGB(0.05, 0.07, 0.12)
-    c.roundRect(card_x, card_y, card_w, card_h, 18, fill=1, stroke=0)
+    # ⚠️ Esto TAPARÍA el PNG si está en modo "card". Solo lo dibujamos si NO hay PNG card.
+    if not (bg_drawn and (GIFT_BG_MODE or "").lower() == "card"):
+        c.setFillColorRGB(0.05, 0.07, 0.12)
+        c.roundRect(card_x, card_y, card_w, card_h, 18, fill=1, stroke=0)
 
-    pad_x = 18 * mm
-    left_x = card_x + pad_x
-    right_x = card_x + card_w - pad_x
-    max_text_width = right_x - left_x
+    # ====== CAPA 2: Texto ======
+    left_x = card_x + 18 * mm
+    right_x = card_x + card_w - 18 * mm
+    max_text_width = card_w - 36 * mm
 
-    # Header
+    # Título
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 24)
     c.drawString(left_x, card_y + card_h - 28 * mm, f"{BRAND_NAME} · Tarjeta Regalo")
@@ -249,7 +238,7 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     c.setFillColorRGB(0.78, 0.82, 0.92)
     c.drawString(left_x, card_y + card_h - 38 * mm, "Edición Día del Padre")
 
-    # Plan + precio
+    # Plan + Importe
     c.setFillColorRGB(0.95, 0.83, 0.54)
     c.setFont("Helvetica-Bold", 18)
     c.drawString(left_x, card_y + card_h - 58 * mm, f"{plan}")
@@ -265,7 +254,7 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     c.setFont("Helvetica", 14)
     c.drawString(left_x, card_y + card_h - 88 * mm, code)
 
-    # Beneficio promoción (wrap por ancho real)
+    # Beneficio promoción
     benefit_title_y = card_y + card_h - 110 * mm
     c.setFont("Helvetica-Bold", 14)
     c.setFillColorRGB(0.92, 0.94, 1.0)
@@ -274,7 +263,7 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     benefit_text = f"{promo_value}. {note}"
     benefit_font = "Helvetica"
     benefit_size = 12
-    leading = 20
+    leading = 18  # ↑ más espaciado entre líneas
 
     c.setFont(benefit_font, benefit_size)
     c.setFillColorRGB(0.78, 0.82, 0.92)
@@ -286,42 +275,26 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
         max_width=max_text_width
     )
 
-    benefit_start_y = benefit_title_y - 12
+    benefit_start_y = benefit_title_y - 18  # ↑ más espacio bajo el título
     text_obj = c.beginText(left_x, benefit_start_y)
     text_obj.setLeading(leading)
     for line in benefit_lines:
         text_obj.textLine(line)
     c.drawText(text_obj)
 
-    benefit_block_height = len(benefit_lines) * leading
-    after_benefit_y = benefit_start_y - benefit_block_height
+    after_benefit_y = benefit_start_y - leading * len(benefit_lines)
 
-    # Footer (evitar solape)
-    footer_y = card_y + 18 * mm
-    footer_font = "Helvetica"
-    footer_size = 10
-    c.setFont(footer_font, footer_size)
-    c.setFillColorRGB(0.62, 0.66, 0.78)
+    # Footer (reservamos espacio para que no solape)
+    safe_bottom = card_y + 18 * mm
+    footer_y = safe_bottom
+    footer_safe_top = footer_y + 14  # altura aproximada del footer
 
-    left_footer = f"Comprador: {buyer_email}"
-    right_footer = "No canjeable por dinero. Sujeto a disponibilidad y valoración."
-
-    gap = 10
-    left_w = pdfmetrics.stringWidth(left_footer, footer_font, footer_size)
-    right_w = pdfmetrics.stringWidth(right_footer, footer_font, footer_size)
-
-    if left_x + left_w + gap > right_x - right_w:
-        c.drawString(left_x, footer_y + 10, left_footer)
-        c.drawRightString(right_x, footer_y, right_footer)
-        safe_bottom_for_content = footer_y + 22
-    else:
-        c.drawString(left_x, footer_y, left_footer)
-        c.drawRightString(right_x, footer_y, right_footer)
-        safe_bottom_for_content = footer_y + 14
-
-    # Cómo canjear (posición dinámica)
-    canjear_title_y = max(card_y + 62 * mm, after_benefit_y - 35)
-    min_canjear_title_y = safe_bottom_for_content + 60
+    # Cómo canjear (más abajo / dinámico, sin invadir footer)
+    canjear_title_y = card_y + 62 * mm
+    # intenta colocarlo relativamente abajo pero sin invadir el footer
+    min_canjear_title_y = footer_safe_top + 60
+    # y si el bloque de beneficio baja mucho, ajusta
+    canjear_title_y = max(canjear_title_y, after_benefit_y - 35)
     if canjear_title_y < min_canjear_title_y:
         canjear_title_y = min_canjear_title_y
 
@@ -339,8 +312,20 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     ]
     y = canjear_title_y - 10 * mm
     for line in canje:
+        if y <= footer_safe_top:
+            break
         c.drawString(left_x, y, line)
         y -= 8 * mm
+
+    # Footer final (siempre al fondo)
+    c.setFillColorRGB(0.62, 0.66, 0.78)
+    c.setFont("Helvetica", 10)
+    c.drawString(left_x, footer_y, f"Comprador: {buyer_email}")
+    c.drawRightString(
+        right_x,
+        footer_y,
+        "No canjeable por dinero. Sujeto a disponibilidad y valoración."
+    )
 
     c.showPage()
     c.save()
@@ -470,7 +455,7 @@ def stripe_webhook():
     return jsonify({"ok": True, "email_sent": True, "code": code}), 200
 
 
-# (Opcional) descarga por código
+# Descarga por código
 @app.get("/giftcards/<code>")
 def download_giftcard(code: str):
     db = load_db()
