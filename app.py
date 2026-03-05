@@ -48,7 +48,36 @@ GIFT_PAYMENT_LINKS = [
     "plink_1T6c85GX2pDFXvsU1kzTrqAi",
     "plink_1T6c2vGX2pDFXvsUztNJ3wT1",
     "plink_1T6t2uGX2pDFXvsUA9tTz26e"
+    "plink_1T7PFNGX2pDFXvsURe9mIM7Z"  # ✅ Tarjeta Especial Día de la Mujer
 ]
+
+# Config por Payment Link (fondo + edición)
+GIFT_LINK_CONFIG = {
+    # default / día del padre (los que ya tienes)
+    "plink_1T6c9kGX2pDFXvsUAMbtXgXu": {"edition": "Día del Padre", "bg": "assets/giftcard_bg.png"},
+    "plink_1T6c85GX2pDFXvsU1kzTrqAi": {"edition": "Día del Padre", "bg": "assets/giftcard_bg.png"},
+    "plink_1T6c2vGX2pDFXvsUztNJ3wT1": {"edition": "Día del Padre", "bg": "assets/giftcard_bg.png"},
+    "plink_1T6t2uGX2pDFXvsUA9tTz26e": {"edition": "Día del Padre", "bg": "assets/giftcard_bg.png"},
+
+    # ✅ NUEVA: Día de la Mujer
+    "plink_1T7PFNGX2pDFXvsURe9mIM7Z": {"edition": "Día de la Mujer", "bg": "assets/giftcard_bg_mujer.png"},
+}
+
+def resolve_bg_path(path_no_fallback: str) -> str:
+    """
+    Devuelve el path si existe.
+    Si no existe, prueba sin extensión .png (por si el archivo se llama 'giftcard_bg_mujer' tal cual).
+    Si tampoco, devuelve el original.
+    """
+    if path_no_fallback and os.path.exists(path_no_fallback):
+        return path_no_fallback
+
+    if path_no_fallback and path_no_fallback.lower().endswith(".png"):
+        alt = path_no_fallback[:-4]  # quita .png
+        if os.path.exists(alt):
+            return alt
+
+    return path_no_fallback
 
 def log(*args):
     print(*args, flush=True)
@@ -131,24 +160,24 @@ def unique_code(amount_eur: int) -> str:
     raise RuntimeError("No se pudo generar un código único")
 
 
-def plan_from_amount(amount_eur: int) -> dict:
+def plan_from_amount(amount_eur: int, edition_label: str = "Día del Padre") -> dict:
     if amount_eur == 68:
         return {
             "plan": "Essential",
             "promo_value": "Cubre una Limpieza Facial Peel & Glow (valorada en 80€)",
-            "note": "Ejemplo de canje durante la promoción Día del Padre."
+            "note": f"Ejemplo de canje durante la promoción {edition_label}."
         }
     if amount_eur == 170:
         return {
             "plan": "Signature",
             "promo_value": "Puede cubrir, por ejemplo, un PRP capilar (valorado en 200€)",
-            "note": "Ejemplo de canje durante la promoción Día del Padre."
+            "note": f"Ejemplo de canje durante la promoción {edition_label}."
         }
     if amount_eur == 299:
         return {
             "plan": "Prestige",
             "promo_value": "Puede cubrir, por ejemplo, un tratamiento de bótox (según valoración médica)",
-            "note": "Ejemplo de canje durante la promoción Día del Padre."
+            "note": f"Ejemplo de canje durante la promoción {edition_label}."
         }
     return {
         "plan": "Tarjeta Regalo",
@@ -180,8 +209,8 @@ def wrap_text_width(text: str, font_name: str, font_size: int, max_width: float)
     return lines
 
 
-def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
-    meta = plan_from_amount(amount_eur)
+def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str, edition_label: str, bg_image_path: str):
+    meta = plan_from_amount(amount_eur, edition_label=edition_label)
     plan = meta["plan"]
     promo_value = meta["promo_value"]
     note = meta["note"]
@@ -202,9 +231,11 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
 
     # ====== CAPA 1: Fondo PNG (A4 exacto) ======
     bg_drawn = False
-    if GIFT_BG_IMAGE and os.path.exists(GIFT_BG_IMAGE):
+    bg_path = resolve_bg_path(bg_image_path or GIFT_BG_IMAGE)
+
+    if bg_path and os.path.exists(bg_path):
         try:
-            bg = ImageReader(GIFT_BG_IMAGE)
+            bg = ImageReader(bg_path)
 
             # IMPORTANTÍSIMO: llenar A4 exacto para que las coords coincidan
             c.drawImage(
@@ -237,7 +268,7 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str):
     subtitle_y = title_y - 10 * mm
     c.setFont("Helvetica", 13)
     c.setFillColorRGB(0.78, 0.82, 0.92)
-    c.drawString(left_x, subtitle_y, "Edición Día del Padre")
+    c.drawString(left_x, subtitle_y, f"Edición {edition_label}")
 
     # Plan + importe
     plan_y = subtitle_y - 20 * mm
@@ -411,6 +442,9 @@ def stripe_webhook():
 
     session = event["data"]["object"]
     payment_link_id = session.get("payment_link")
+    cfg = GIFT_LINK_CONFIG.get(payment_link_id, {"edition": "Día del Padre", "bg": GIFT_BG_IMAGE})
+    edition_label = cfg.get("edition", "Día del Padre")
+    bg_image_path = cfg.get("bg", GIFT_BG_IMAGE)
 
     if payment_link_id not in GIFT_PAYMENT_LINKS:
         log("Ignoring payment from non-giftcard payment link:", payment_link_id)
@@ -439,7 +473,14 @@ def stripe_webhook():
     pdf_filename = f"giftcard_{code}.pdf"
     pdf_path = os.path.join(PDF_DIR, pdf_filename)
 
-    generate_pdf(pdf_path, code=code, amount_eur=amount_eur, buyer_email=buyer_email)
+    generate_pdf(
+        pdf_path,
+        code=code,
+        amount_eur=amount_eur,
+        buyer_email=buyer_email,
+        edition_label=edition_label,
+        bg_image_path=bg_image_path
+    )
 
     created_at = datetime.now(timezone.utc).isoformat()
     record = {
@@ -461,7 +502,7 @@ def stripe_webhook():
         importe=amount_eur
     )
 
-    subject = f"Tu Tarjeta Regalo {BRAND_NAME} · Día del Padre ({amount_eur}€)"
+    subject = f"Tu Tarjeta Regalo {BRAND_NAME} · {edition_label} ({amount_eur}€)"
     body = f"""
     <div style="font-family:Arial,Helvetica,sans-serif; line-height:1.5">
       <h2 style="margin:0 0 8px">¡Gracias por tu compra!</h2>
