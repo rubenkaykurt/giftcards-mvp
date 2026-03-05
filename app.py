@@ -47,7 +47,7 @@ GIFT_PAYMENT_LINKS = [
     "plink_1T6c9kGX2pDFXvsUAMbtXgXu",
     "plink_1T6c85GX2pDFXvsU1kzTrqAi",
     "plink_1T6c2vGX2pDFXvsUztNJ3wT1",
-    "plink_1T6t2uGX2pDFXvsUA9tTz26e"
+    "plink_1T6t2uGX2pDFXvsUA9tTz26e",
     "plink_1T7PFNGX2pDFXvsURe9mIM7Z"  # ✅ Tarjeta Especial Día de la Mujer
 ]
 
