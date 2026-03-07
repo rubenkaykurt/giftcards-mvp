@@ -12,7 +12,6 @@ import stripe
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
@@ -24,6 +23,7 @@ from sendgrid.helpers.mail import (
 load_dotenv()
 
 app = Flask(__name__)
+BASE_DIR = app.root_path
 
 # ====== ENV ======
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
@@ -48,40 +48,76 @@ GIFT_PAYMENT_LINKS = [
     "plink_1T6c85GX2pDFXvsU1kzTrqAi",
     "plink_1T6c2vGX2pDFXvsUztNJ3wT1",
     "plink_1T6t2uGX2pDFXvsUA9tTz26e",
-    "plink_1T7PFNGX2pDFXvsURe9mIM7Z"  # ✅ Tarjeta Especial Día de la Mujer
+    "plink_1T7PFNGX2pDFXvsURe9mIM7Z",  # Tarjeta Especial Día de la Mujer
 ]
 
 # Config por Payment Link (fondo + edición)
 GIFT_LINK_CONFIG = {
-    # default / día del padre (los que ya tienes)
-    "plink_1T6c9kGX2pDFXvsUAMbtXgXu": {"edition": "Día del Padre", "bg": "assets/giftcard_bg.png"},
-    "plink_1T6c85GX2pDFXvsU1kzTrqAi": {"edition": "Día del Padre", "bg": "assets/giftcard_bg.png"},
-    "plink_1T6c2vGX2pDFXvsUztNJ3wT1": {"edition": "Día del Padre", "bg": "assets/giftcard_bg.png"},
-    "plink_1T6t2uGX2pDFXvsUA9tTz26e": {"edition": "Día del Padre", "bg": "assets/giftcard_bg.png"},
+    # Día del Padre / genéricas anteriores
+    "plink_1T6c9kGX2pDFXvsUAMbtXgXu": {
+        "edition": "Día del Padre",
+        "bg": "assets/giftcard_bg.png",
+    },
+    "plink_1T6c85GX2pDFXvsU1kzTrqAi": {
+        "edition": "Día del Padre",
+        "bg": "assets/giftcard_bg.png",
+    },
+    "plink_1T6c2vGX2pDFXvsUztNJ3wT1": {
+        "edition": "Día del Padre",
+        "bg": "assets/giftcard_bg.png",
+    },
+    "plink_1T6t2uGX2pDFXvsUA9tTz26e": {
+        "edition": "Día del Padre",
+        "bg": "assets/giftcard_bg.png",
+    },
 
-    # ✅ NUEVA: Día de la Mujer
-    "plink_1T7PFNGX2pDFXvsURe9mIM7Z": {"edition": "Día de la Mujer", "bg": "assets/giftcard_bg_mujer.png"},
+    # Día de la Mujer
+    "plink_1T7PFNGX2pDFXvsURe9mIM7Z": {
+        "edition": "Día de la Mujer",
+        "bg": "assets/giftcard_bg_mujer.png",
+    },
 }
 
-def resolve_bg_path(path_no_fallback: str) -> str:
-    """
-    Devuelve el path si existe.
-    Si no existe, prueba sin extensión .png (por si el archivo se llama 'giftcard_bg_mujer' tal cual).
-    Si tampoco, devuelve el original.
-    """
-    if path_no_fallback and os.path.exists(path_no_fallback):
-        return path_no_fallback
-
-    if path_no_fallback and path_no_fallback.lower().endswith(".png"):
-        alt = path_no_fallback[:-4]  # quita .png
-        if os.path.exists(alt):
-            return alt
-
-    return path_no_fallback
 
 def log(*args):
     print(*args, flush=True)
     sys.stdout.flush()
+
+
+def abs_asset_path(relative_path: str) -> str:
+    if not relative_path:
+        return ""
+    if os.path.isabs(relative_path):
+        return relative_path
+    return os.path.join(BASE_DIR, relative_path)
+
+
+def resolve_bg_path(path_no_fallback: str) -> str:
+    """
+    Convierte la ruta a absoluta y comprueba si existe.
+    Si no existe y termina en .png, prueba también sin extensión.
+    """
+    if not path_no_fallback:
+        return ""
+
+    abs_path = abs_asset_path(path_no_fallback)
+    if os.path.exists(abs_path):
+        return abs_path
+
+    if abs_path.lower().endswith(".png"):
+        alt = abs_path[:-4]
+        if os.path.exists(alt):
+            return alt
+
+    return abs_path
+
+
+def abs_runtime_path(path_value: str) -> str:
+    if not path_value:
+        return ""
+    if os.path.isabs(path_value):
+        return path_value
+    return os.path.join(BASE_DIR, path_value)
 
 
 # ====== LOGS GLOBALES ======
@@ -106,7 +142,6 @@ def _log_response(resp):
     return resp
 
 
-# ✅ no “comerse” 404/405/400 de Flask.
 @app.errorhandler(Exception)
 def _log_exception(e):
     log("!!! EXCEPTION !!!", repr(e))
@@ -117,11 +152,13 @@ def _log_exception(e):
 
 # ====== DB ======
 def load_db():
-    if not os.path.exists(DB_PATH):
+    db_path = abs_runtime_path(DB_PATH)
+
+    if not os.path.exists(db_path):
         return {"giftcards": []}
 
     try:
-        with open(DB_PATH, "r", encoding="utf-8") as f:
+        with open(db_path, "r", encoding="utf-8") as f:
             raw = f.read().strip()
             if not raw:
                 return {"giftcards": []}
@@ -137,7 +174,9 @@ def load_db():
 
 
 def save_db(db):
-    with open(DB_PATH, "w", encoding="utf-8") as f:
+    db_path = abs_runtime_path(DB_PATH)
+    os.makedirs(os.path.dirname(db_path), exist_ok=True) if os.path.dirname(db_path) else None
+    with open(db_path, "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=2)
 
 
@@ -160,7 +199,19 @@ def unique_code(amount_eur: int) -> str:
     raise RuntimeError("No se pudo generar un código único")
 
 
-def plan_from_amount(amount_eur: int, edition_label: str = "Día del Padre") -> dict:
+def plan_from_amount(amount_eur: int, edition_label: str = "Día del Padre", payment_link_id: str = "") -> dict:
+    # Caso especial: tarjeta Día de la Mujer
+    if payment_link_id == "plink_1T7PFNGX2pDFXvsURe9mIM7Z":
+        return {
+            "plan": "Tarjeta Regalo",
+            "promo_value": (
+                "Tarjeta especial Día de la Mujer. "
+                "Valor real 285€ en tratamientos, adquirida por 200€ durante la promoción. "
+                "Validez: 12 meses. Utilizable en todos los tratamientos de Terapyel."
+            ),
+            "note": ""
+        }
+
     if amount_eur == 68:
         return {
             "plan": "Essential",
@@ -179,6 +230,7 @@ def plan_from_amount(amount_eur: int, edition_label: str = "Día del Padre") -> 
             "promo_value": "Puede cubrir, por ejemplo, un tratamiento de bótox (según valoración médica)",
             "note": f"Ejemplo de canje durante la promoción {edition_label}."
         }
+
     return {
         "plan": "Tarjeta Regalo",
         "promo_value": "Importe canjeable por tratamientos/servicios hasta el valor de la tarjeta.",
@@ -204,13 +256,26 @@ def wrap_text_width(text: str, font_name: str, font_size: int, max_width: float)
             if current:
                 lines.append(current)
             current = w
+
     if current:
         lines.append(current)
     return lines
 
 
-def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str, edition_label: str, bg_image_path: str):
-    meta = plan_from_amount(amount_eur, edition_label=edition_label)
+def generate_pdf(
+    filepath: str,
+    code: str,
+    amount_eur: int,
+    buyer_email: str,
+    edition_label: str,
+    bg_image_path: str,
+    payment_link_id: str
+):
+    meta = plan_from_amount(
+        amount_eur,
+        edition_label=edition_label,
+        payment_link_id=payment_link_id
+    )
     plan = meta["plan"]
     promo_value = meta["promo_value"]
     note = meta["note"]
@@ -218,26 +283,28 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str, ed
     c = canvas.Canvas(filepath, pagesize=A4)
     w, h = A4
 
-    # ====== Layout base (capa 2) ======
+    # ====== Layout base ======
     margin = 18 * mm
     card_x, card_y = margin, margin
     card_w, card_h = w - 2 * margin, h - 2 * margin
 
-    # Padding interno del texto dentro de la tarjeta
     inner_pad_x = 18 * mm
     left_x = card_x + inner_pad_x
     right_x = card_x + card_w - inner_pad_x
     max_text_width = right_x - left_x
 
-    # ====== CAPA 1: Fondo PNG (A4 exacto) ======
+    # ====== CAPA 1: Fondo PNG ======
     bg_drawn = False
+    log("generate_pdf() bg_image_path recibido:", bg_image_path)
+
     bg_path = resolve_bg_path(bg_image_path or GIFT_BG_IMAGE)
+    log("generate_pdf() bg_path resuelto:", bg_path)
+    log("generate_pdf() bg exists:", os.path.exists(bg_path))
 
     if bg_path and os.path.exists(bg_path):
+        log("Usando fondo PNG:", bg_path)
         try:
             bg = ImageReader(bg_path)
-
-            # IMPORTANTÍSIMO: llenar A4 exacto para que las coords coincidan
             c.drawImage(
                 bg,
                 0, 0,
@@ -250,27 +317,24 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str, ed
         except Exception as e:
             log("Error loading background:", repr(e))
 
-    # fallback si no hay imagen
     if not bg_drawn:
+        log("FALLBACK: no se pudo usar fondo PNG, se dibuja fondo por defecto")
         c.setFillColorRGB(0.03, 0.04, 0.07)
         c.rect(0, 0, w, h, fill=1, stroke=0)
         c.setFillColorRGB(0.05, 0.07, 0.12)
         c.roundRect(card_x, card_y, card_w, card_h, 18, fill=1, stroke=0)
 
     # ====== CAPA 2: Texto ======
-    # Título
     title_y = card_y + card_h - 28 * mm
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 24)
     c.drawString(left_x, title_y, f"{BRAND_NAME} · Tarjeta Regalo")
 
-    # Subtítulo
     subtitle_y = title_y - 10 * mm
     c.setFont("Helvetica", 13)
     c.setFillColorRGB(0.78, 0.82, 0.92)
     c.drawString(left_x, subtitle_y, f"Edición {edition_label}")
 
-    # Plan + importe
     plan_y = subtitle_y - 20 * mm
     c.setFillColorRGB(0.95, 0.83, 0.54)
     c.setFont("Helvetica-Bold", 18)
@@ -279,7 +343,6 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str, ed
     c.setFont("Helvetica-Bold", 34)
     c.drawRightString(right_x, plan_y, f"{amount_eur}€")
 
-    # Código
     code_title_y = plan_y - 22 * mm
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.setFont("Helvetica-Bold", 14)
@@ -289,16 +352,15 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str, ed
     c.setFont("Helvetica", 14)
     c.drawString(left_x, code_value_y, code)
 
-    # Beneficio promoción
     benefit_title_y = code_value_y - 26 * mm
     c.setFont("Helvetica-Bold", 14)
     c.setFillColorRGB(0.92, 0.94, 1.0)
     c.drawString(left_x, benefit_title_y, "Beneficio promoción")
 
-    benefit_text = f"{promo_value}. {note}"
+    benefit_text = promo_value if not note else f"{promo_value}. {note}"
     benefit_font = "Helvetica"
     benefit_size = 12
-    leading = 16  # separación entre líneas del párrafo
+    leading = 16
 
     c.setFont(benefit_font, benefit_size)
     c.setFillColorRGB(0.78, 0.82, 0.92)
@@ -310,7 +372,6 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str, ed
         max_width=max_text_width
     )
 
-    # MÁS aire entre título y texto (esto era lo que preguntaste)
     benefit_start_y = benefit_title_y - 6 * mm
     text_obj = c.beginText(left_x, benefit_start_y)
     text_obj.setLeading(leading)
@@ -318,18 +379,14 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str, ed
         text_obj.textLine(line)
     c.drawText(text_obj)
 
-    # dónde acaba el bloque de beneficio
     benefit_end_y = benefit_start_y - leading * len(benefit_lines)
 
-    # ====== Zona reservada para la imagen del diseño (la foto) ======
-    # Ajusta estos 2 números si el diseñador mueve la foto:
+    # Zona reservada para imagen/diseño
     photo_top_y = card_y + 95 * mm
     photo_bottom_y = card_y + 60 * mm
 
-    # ====== Cómo canjear (SIEMPRE arriba de la foto) ======
-    # Colócalo entre el final del beneficio y el inicio de la foto
+    # Cómo canjear
     canjear_title_y = min(benefit_end_y - 10 * mm, photo_top_y - 10 * mm)
-    # pero que no suba demasiado (evita que se pegue arriba si el texto de beneficio es corto)
     canjear_title_y = max(canjear_title_y, card_y + 110 * mm)
 
     c.setFillColorRGB(0.92, 0.94, 1.0)
@@ -349,7 +406,6 @@ def generate_pdf(filepath: str, code: str, amount_eur: int, buyer_email: str, ed
         c.drawString(left_x, y, line)
         y -= 8 * mm
 
-    # Footer (debajo, sin solapar)
     footer_y = card_y + 18 * mm
     c.setFillColorRGB(0.62, 0.66, 0.78)
     c.setFont("Helvetica", 10)
@@ -393,6 +449,7 @@ def send_email_with_pdf(to_email: str, subject: str, body: str, pdf_path: str):
     sg = SendGridAPIClient(SENDGRID_API_KEY)
     sg.send(message)
 
+
 def push_to_google_sheets(fecha_iso: str, codigo: str, cliente: str, importe: int):
     if not SHEETS_WEBHOOK_URL:
         log("SHEETS_WEBHOOK_URL vacío: no se envía a Google Sheets")
@@ -410,8 +467,8 @@ def push_to_google_sheets(fecha_iso: str, codigo: str, cliente: str, importe: in
         r = requests.post(SHEETS_WEBHOOK_URL, json=payload, timeout=10)
         log("Sheets push status:", r.status_code, "resp:", r.text[:200])
     except Exception as e:
-        # Importante: NO romper el webhook de Stripe por culpa de Sheets
         log("Sheets push FAILED:", repr(e))
+
 
 # ====== WEBHOOK ======
 @app.route("/stripe/webhook", methods=["POST"], strict_slashes=False)
@@ -442,9 +499,19 @@ def stripe_webhook():
 
     session = event["data"]["object"]
     payment_link_id = session.get("payment_link")
-    cfg = GIFT_LINK_CONFIG.get(payment_link_id, {"edition": "Día del Padre", "bg": GIFT_BG_IMAGE})
+
+    cfg = GIFT_LINK_CONFIG.get(
+        payment_link_id,
+        {"edition": "Día del Padre", "bg": GIFT_BG_IMAGE}
+    )
     edition_label = cfg.get("edition", "Día del Padre")
     bg_image_path = cfg.get("bg", GIFT_BG_IMAGE)
+
+    log("Payment link recibido:", payment_link_id)
+    log("Edition elegida:", edition_label)
+    log("BG configurado:", bg_image_path)
+    log("BG resuelto:", resolve_bg_path(bg_image_path))
+    log("BG existe:", os.path.exists(resolve_bg_path(bg_image_path)))
 
     if payment_link_id not in GIFT_PAYMENT_LINKS:
         log("Ignoring payment from non-giftcard payment link:", payment_link_id)
@@ -461,8 +528,9 @@ def stripe_webhook():
 
     amount_eur = euros_from_stripe_amount(amount_total, currency)
 
-    if not os.path.isdir(PDF_DIR):
-        os.makedirs(PDF_DIR, exist_ok=True)
+    pdf_dir_abs = abs_runtime_path(PDF_DIR)
+    if not os.path.isdir(pdf_dir_abs):
+        os.makedirs(pdf_dir_abs, exist_ok=True)
 
     session_id = session.get("id")
     db = load_db()
@@ -471,7 +539,7 @@ def stripe_webhook():
 
     code = unique_code(amount_eur)
     pdf_filename = f"giftcard_{code}.pdf"
-    pdf_path = os.path.join(PDF_DIR, pdf_filename)
+    pdf_path = os.path.join(pdf_dir_abs, pdf_filename)
 
     generate_pdf(
         pdf_path,
@@ -479,7 +547,8 @@ def stripe_webhook():
         amount_eur=amount_eur,
         buyer_email=buyer_email,
         edition_label=edition_label,
-        bg_image_path=bg_image_path
+        bg_image_path=bg_image_path,
+        payment_link_id=payment_link_id
     )
 
     created_at = datetime.now(timezone.utc).isoformat()
@@ -495,6 +564,7 @@ def stripe_webhook():
     }
     db["giftcards"].append(record)
     save_db(db)
+
     push_to_google_sheets(
         fecha_iso=created_at,
         codigo=code,
@@ -518,7 +588,12 @@ def stripe_webhook():
     """
 
     try:
-        send_email_with_pdf(to_email=buyer_email, subject=subject, body=body, pdf_path=pdf_path)
+        send_email_with_pdf(
+            to_email=buyer_email,
+            subject=subject,
+            body=body,
+            pdf_path=pdf_path
+        )
     except Exception as e:
         record["status"] = "issued_email_failed"
         record["email_error"] = str(e)
@@ -535,9 +610,11 @@ def download_giftcard(code: str):
     gc = next((x for x in db.get("giftcards", []) if x.get("code") == code), None)
     if not gc:
         abort(404)
+
     pdf_path = gc.get("pdf_path")
     if not pdf_path or not os.path.exists(pdf_path):
         abort(404)
+
     return send_file(pdf_path, as_attachment=True, download_name=os.path.basename(pdf_path))
 
 
