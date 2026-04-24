@@ -49,6 +49,11 @@ GIFT_PAYMENT_LINKS = [
     "plink_1T6c2vGX2pDFXvsUztNJ3wT1",
     "plink_1T6t2uGX2pDFXvsUA9tTz26e",
     "plink_1T7PFNGX2pDFXvsURe9mIM7Z",  # Tarjeta Especial Día de la Mujer
+    # Día de la Madre
+    "plink_1TPq6xGX2pDFXvsUYRVwHfLd",
+    "plink_1TPq9TGX2pDFXvsUNDDw5oe2",
+    "plink_1TPqB4GX2pDFXvsUUteTdVjE",
+    "plink_1TPrilGX2pDFXvsUqY5UqgHq",
 ]
 
 # Config por Payment Link (fondo + edición)
@@ -76,6 +81,13 @@ GIFT_LINK_CONFIG = {
         "edition": "Día de la Mujer",
         "bg": "assets/giftcard_bg_mujer.png",
     },
+
+    # TODO: crear assets/giftcard_bg_madre.png antes de publicar a producción
+    # Día de la Madre
+    "plink_1TPq6xGX2pDFXvsUYRVwHfLd": {"edition": "Día de la Madre", "bg": "assets/giftcard_bg_madre.png"},
+    "plink_1TPq9TGX2pDFXvsUNDDw5oe2": {"edition": "Día de la Madre", "bg": "assets/giftcard_bg_madre.png"},
+    "plink_1TPqB4GX2pDFXvsUUteTdVjE": {"edition": "Día de la Madre", "bg": "assets/giftcard_bg_madre.png"},
+    "plink_1TPrilGX2pDFXvsUqY5UqgHq": {"edition": "Día de la Madre", "bg": "assets/giftcard_bg_madre.png"},
 }
 
 
@@ -211,6 +223,21 @@ def plan_from_amount(amount_eur: int, edition_label: str = "Día del Padre", pay
             ),
             "note": ""
         }
+
+    if edition_label == "Día de la Madre":
+        madre_promo = (
+            "Saldo canjeable por cualquier tratamiento de Terapyel. "
+            "Incluye un 15 % de descuento extra al canjearla. Validez 12 meses."
+        )
+        if amount_eur == 68:
+            plan = "Pausa"
+        elif amount_eur == 170:
+            plan = "Renacer"
+        elif amount_eur == 299:
+            plan = "Mimos"
+        else:
+            plan = "Tarjeta Regalo"
+        return {"plan": plan, "promo_value": madre_promo, "note": ""}
 
     if amount_eur == 68:
         return {
@@ -573,9 +600,15 @@ def stripe_webhook():
     )
 
     subject = f"Tu Tarjeta Regalo {BRAND_NAME} · {edition_label} ({amount_eur}€)"
+    if edition_label == "Día de la Madre":
+        email_h2 = "¡Tu tarjeta para el Día de la Madre está lista! 🌸"
+    elif edition_label == "Día de la Mujer":
+        email_h2 = "¡Tu tarjeta para el Día de la Mujer está lista!"
+    else:
+        email_h2 = "¡Gracias por tu compra!"
     body = f"""
     <div style="font-family:Arial,Helvetica,sans-serif; line-height:1.5">
-      <h2 style="margin:0 0 8px">¡Gracias por tu compra!</h2>
+      <h2 style="margin:0 0 8px">{email_h2}</h2>
       <p style="margin:0 0 12px">Adjuntamos tu tarjeta regalo en PDF.</p>
       <p style="margin:0 0 12px">
         <strong>Código:</strong> {code}<br/>
