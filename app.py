@@ -53,6 +53,7 @@ GIFT_PAYMENT_LINKS = [
     "plink_1TPq6xGX2pDFXvsUYRVwHfLd",
     "plink_1TPq9TGX2pDFXvsUNDDw5oe2",
     "plink_1TPqB4GX2pDFXvsUUteTdVjE",
+    "plink_1TPrilGX2pDFXvsUqY5UqgHq",
 ]
 
 # Config por Payment Link (fondo + edición)
@@ -86,6 +87,7 @@ GIFT_LINK_CONFIG = {
     "plink_1TPq6xGX2pDFXvsUYRVwHfLd": {"edition": "Día de la Madre", "bg": "assets/giftcard_bg_madre.png"},
     "plink_1TPq9TGX2pDFXvsUNDDw5oe2": {"edition": "Día de la Madre", "bg": "assets/giftcard_bg_madre.png"},
     "plink_1TPqB4GX2pDFXvsUUteTdVjE": {"edition": "Día de la Madre", "bg": "assets/giftcard_bg_madre.png"},
+    "plink_1TPrilGX2pDFXvsUqY5UqgHq": {"edition": "Día de la Madre", "bg": "assets/giftcard_bg_madre.png"},
 }
 
 
