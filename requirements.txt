@@ -5,3 +5,4 @@ sendgrid==6.11.0
 python-dotenv==1.0.1
 gunicorn==22.0.0
 requests==2.32.5
+resend>=2.0.0

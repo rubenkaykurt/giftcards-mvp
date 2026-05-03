@@ -20,6 +20,8 @@ from sendgrid.helpers.mail import (
     Mail, Attachment, FileContent, FileName, FileType, Disposition
 )
 
+import resend
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -477,6 +479,24 @@ def send_email_with_pdf(to_email: str, subject: str, body: str, pdf_path: str):
     sg.send(message)
 
 
+def send_email_with_pdf_resend(to_email: str, subject: str, body: str, pdf_path: str):
+    resend.api_key = os.environ["RESEND_API_KEY"]
+    with open(pdf_path, "rb") as f:
+        pdf_bytes = f.read()
+    params = {
+        "from": os.environ.get("EMAIL_FROM", "Terapyel <info@terapyel.com>"),
+        "to": [to_email],
+        "reply_to": "info@terapyel.com",
+        "subject": subject,
+        "html": body,
+        "attachments": [{
+            "filename": os.path.basename(pdf_path),
+            "content": list(pdf_bytes),
+        }],
+    }
+    return resend.Emails.send(params)
+
+
 def push_to_google_sheets(fecha_iso: str, codigo: str, cliente: str, importe: int):
     if not SHEETS_WEBHOOK_URL:
         log("SHEETS_WEBHOOK_URL vacío: no se envía a Google Sheets")
@@ -621,7 +641,7 @@ def stripe_webhook():
     """
 
     try:
-        send_email_with_pdf(
+        send_email_with_pdf_resend(
             to_email=buyer_email,
             subject=subject,
             body=body,
