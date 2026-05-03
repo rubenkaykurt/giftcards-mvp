@@ -480,6 +480,7 @@ def send_email_with_pdf(to_email: str, subject: str, body: str, pdf_path: str):
 
 
 def send_email_with_pdf_resend(to_email: str, subject: str, body: str, pdf_path: str):
+    print(f"=== RESEND SEND START === to={to_email}", flush=True)
     resend.api_key = os.environ["RESEND_API_KEY"]
     with open(pdf_path, "rb") as f:
         pdf_bytes = f.read()
@@ -494,7 +495,9 @@ def send_email_with_pdf_resend(to_email: str, subject: str, body: str, pdf_path:
             "content": list(pdf_bytes),
         }],
     }
-    return resend.Emails.send(params)
+    result = resend.Emails.send(params)
+    print(f"=== RESEND SEND OK === id={result.get('id')}", flush=True)
+    return result
 
 
 def push_to_google_sheets(fecha_iso: str, codigo: str, cliente: str, importe: int):
@@ -648,6 +651,7 @@ def stripe_webhook():
             pdf_path=pdf_path
         )
     except Exception as e:
+        log(f"=== RESEND SEND FAILED === error={repr(e)}")
         record["status"] = "issued_email_failed"
         record["email_error"] = str(e)
         save_db(db)
